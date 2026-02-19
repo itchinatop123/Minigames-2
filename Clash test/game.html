@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clash Royale Game</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #1a1a1a; display: flex; justify-content: center; align-items: center; min-height: 100vh; font-family: Arial; }
+        #game-wrapper { background: #333; padding: 20px; border-radius: 10px; text-align: center; }
+        canvas { display: block; background: #4a7c4e; border: 3px solid #222; cursor: crosshair; margin-bottom: 15px; }
+        #ui { background: #2c3e50; padding: 15px; border-radius: 5px; color: white; }
+        #elixir-text { margin-bottom: 10px; font-size: 14px; }
+        #elixir-bar { width: 400px; height: 25px; background: #444; border-radius: 5px; overflow: hidden; margin-bottom: 15px; }
+        #elixir-fill { height: 100%; background: linear-gradient(90deg, #d81b60, #f06292); width: 50%; transition: width 0.1s; }
+        #hand { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+        .card { width: 90px; height: 110px; background: #ecf0f1; color: #2c3e50; border: 3px solid #7f8c8d; border-radius: 8px; cursor: pointer; padding: 5px; font-size: 11px; font-weight: bold; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; transition: all 0.2s; }
+        .card:hover { transform: translateY(-5px); border-color: #f1c40f; }
+        .card.selected { border-color: #f1c40f; box-shadow: 0 0 15px #f1c40f; }
+        .card.disabled { opacity: 0.5; cursor: not-allowed; }
+        #status { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 60px; font-weight: bold; color: #f1c40f; display: none; text-shadow: 3px 3px #000; z-index: 100; }
+    </style>
+</head>
+<body>
+
+<div id="game-wrapper">
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+    <div id="ui">
+        <div id="elixir-text">Elixir: 5</div>
+        <div id="elixir-bar"><div id="elixir-fill"></div></div>
+        <div id="hand"></div>
+    </div>
+</div>
+<div id="status"></div>
+
+<script>
+const UNITS = {
+    ELITE_BARBS: { name: 'E-Barbs', cost: 6, hp: 600, dmg: 50, speed: 2.2, range: 25, color: '#f1c40f' },
+    MINI_PEKKA: { name: 'Mini P.E.K.K.A', cost: 4, hp: 700, dmg: 150, speed: 1.6, range: 30, color: '#3498db' },
+    PEKKA: { name: 'P.E.K.K.A', cost: 7, hp: 2000, dmg: 250, speed: 0.8, range: 35, color: '#2980b9' },
+    MEGA_KNIGHT: { name: 'Mega Knight', cost: 7, hp: 1800, dmg: 90, speed: 1.3, range: 35, color: '#8e44ad' },
+    GOBLIN_BARREL: { name: 'Gob Barrel', cost: 3, hp: 150, dmg: 20, speed: 2.5, range: 20, color: '#2ecc71' },
+    FIREBALL: { name: 'Fireball', cost: 4, hp: 1, dmg: 400, speed: 0, range: 60, color: '#e74c3c' },
+    GUARDS: { name: 'Guards', cost: 3, hp: 250, dmg: 30, speed: 1.5, range: 25, color: '#bdc3c7' }
+};
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const elixirText = document.getElementById('elixir-text');
+const elixirFill = document.getElementById('elixir-fill');
+const handDiv = document.getElementById('hand');
+const statusDiv = document.getElementById('status');
+
+let playerElixir = 5, enemyElixir = 5;
+let units = [], towers = [];
+let selectedCard = null, gameOver = false;
+
+class Tower {
+    constructor(x, y, owner, isKing) {
+        this.x = x;
+        this.y = y;
+        this.owner = owner;
+        this.isKing = isKing;
+        this.hp = isKing ? 3500 : 1800;
+        this.maxHp = this.hp;
+        this.range = 160;
+        this.atkCooldown = 0;
+    }
+
+    draw() {
+        ctx.fillStyle = this.owner === 'player' ? '#2980b9' : '#c0392b';
+        if (this.isKing) {
+            ctx.fillRect(this.x - 25, this.y - 25, 50, 50);
+        } else {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 22, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.fillStyle = '#000';
+        ctx.fillRect(this.x - 20, this.y - 35, 40, 6);
+        ctx.fillStyle = '#2ecc71';
+        ctx.fillRect(this.x - 20, this.y - 35, (this.hp / this.maxHp) * 40, 6);
+    }
+}
+
+class Unit {
+    constructor(typeKey, x, y, owner) {
+        const stats = UNITS[typeKey];
+        this.typeKey = typeKey;
+        this.name = stats.name;
+        this.x = x;
+        this.y = y;
+        this.owner = owner;
+        this.hp = stats.hp;
+        this.maxHp = stats.hp;
+        this.dmg = stats.dmg;
+        this.speed = stats.speed;
+        this.range = stats.range;
+        this.color = stats.color;
+        this.atkCooldown = 0;
+    }
+
+    update() {
+        let targets = [...towers.filter(t => t.owner !== this.owner && t.hp > 0), ...units.filter(u => u.owner !== this.owner && u.hp > 0)];
+        let closest = null, minDist = Infinity;
+        targets.forEach(t => {
+            let d = Math.hypot(t.x - this.x, t.y - this.y);
+            if (d < minDist) { minDist = d; closest = t; }
+        });
+
+        if (closest) {
+            let dist = Math.hypot(closest.x - this.x, closest.y - this.y);
+            if (dist > this.range) {
+                let angle = Math.atan2(closest.y - this.y, closest.x - this.x);
+                this.x += Math.cos(angle) * this.speed;
+                this.y += Math.sin(angle) * this.speed;
+            } else if (this.atkCooldown <= 0) {
+                closest.hp -= this.dmg;
+                this.atkCooldown = 60;
+            }
+        }
+        if (this.atkCooldown > 0) this.atkCooldown--;
+    }
+
+    draw() {
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 12, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.fillStyle = 'black';
+        ctx.fillRect(this.x - 10, this.y - 18, 20, 3);
+        ctx.fillStyle = 'red';
+        ctx.fillRect(this.x - 10, this.y - 18, (this.hp / this.maxHp) * 20, 3);
+    }
+}
+
+function init() {
+    towers.push(new Tower(100, 520, 'player', false));
+    towers.push(new Tower(300, 520, 'player', false));
+    towers.push(new Tower(200, 560, 'player', true));
+    towers.push(new Tower(100, 80, 'enemy', false));
+    towers.push(new Tower(300, 80, 'enemy', false));
+    towers.push(new Tower(200, 40, 'enemy', true));
+
+    createHand();
+    gameLoop();
+}
+
+function createHand() {
+    const keys = Object.keys(UNITS);
+    for (let i = 0; i < 4; i++) {
+        const key = keys[Math.floor(Math.random() * keys.length)];
+        addCard(key);
+    }
+}
+
+function addCard(key) {
+    const data = UNITS[key];
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.key = key;
+    card.innerHTML = `${data.name}<br><b>${data.cost}</b>`;
+    card.onclick = () => {
+        if (playerElixir >= data.cost) {
+            document.querySelectorAll('.card').forEach(c => c.classList.remove('selected'));
+            card.classList.add('selected');
+            selectedCard = key;
+        }
+    };
+    handDiv.appendChild(card);
+}
+
+function gameLoop() {
+    if (gameOver) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#2980b9';
+    ctx.fillRect(0, 290, 400, 20);
+
+    if (playerElixir < 10) playerElixir += 0.007;
+    if (enemyElixir < 10) enemyElixir += 0.008;
+    elixirText.innerText = `Elixir: ${Math.floor(playerElixir)}`;
+    elixirFill.style.width = (playerElixir / 10) * 100 + '%';
+
+    if (Math.random() < 0.01 && enemyElixir >= 3) {
+        const keys = Object.keys(UNITS);
+        const key = keys[Math.floor(Math.random() * keys.length)];
+        if (enemyElixir >= UNITS[key].cost) {
+            units.push(new Unit(key, Math.random() * 300 + 50, 100, 'enemy'));
+            enemyElixir -= UNITS[key].cost;
+        }
+    }
+
+    units = units.filter(u => u.hp > 0);
+    units.forEach(u => { u.update(); u.draw(); });
+
+    towers.forEach(t => {
+        if (t.hp > 0) {
+            t.draw();
+            let target = units.find(u => u.owner !== t.owner && Math.hypot(u.x - t.x, u.y - t.y) < t.range);
+            if (target && t.atkCooldown <= 0) {
+                target.hp -= 40;
+                t.atkCooldown = 45;
+                ctx.beginPath();
+                ctx.strokeStyle = 'yellow';
+                ctx.moveTo(t.x, t.y);
+                ctx.lineTo(target.x, target.y);
+                ctx.stroke();
+            }
+            if (t.atkCooldown > 0) t.atkCooldown--;
+        }
+    });
+
+    updateUI();
+
+    const enemyTowers = towers.filter(t => t.owner === 'enemy' && t.hp > 0).length;
+    const playerTowers = towers.filter(t => t.owner === 'player' && t.hp > 0).length;
+    if (enemyTowers === 0) { gameOver = true; statusDiv.innerText = 'VICTORY!'; statusDiv.style.display = 'block'; }
+    if (playerTowers === 0) { gameOver = true; statusDiv.innerText = 'DEFEAT...'; statusDiv.style.color = '#e74c3c'; statusDiv.style.display = 'block'; }
+
+    requestAnimationFrame(gameLoop);
+}
+
+function updateUI() {
+    document.querySelectorAll('.card').forEach(card => {
+        const cost = UNITS[card.dataset.key].cost;
+        if (cost > playerElixir) card.classList.add('disabled');
+        else card.classList.remove('disabled');
+    });
+}
+
+canvas.onclick = (e) => {
+    if (!selectedCard || gameOver) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const cost = UNITS[selectedCard].cost;
+
+    if (y < 300 && selectedCard !== 'FIREBALL') return;
+
+    if (playerElixir >= cost) {
+        units.push(new Unit(selectedCard, x, y, 'player'));
+        playerElixir -= cost;
+        const card = document.querySelector('.card.selected');
+        card.remove();
+        const keys = Object.keys(UNITS);
+        addCard(keys[Math.floor(Math.random() * keys.length)]);
+        selectedCard = null;
+    }
+};
+
+init();
+</script>
+
+</body>
+</html>

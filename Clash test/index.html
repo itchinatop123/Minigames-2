@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clash Royale JS - Auto AI Edition</title>
+    <style>
+        body { margin: 0; background: #1a1a1a; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; flex-direction: column; align-items: center; color: white; overflow: hidden; }
+        #game-container { position: relative; width: 420px; height: 650px; background: #4a773c; border: 8px solid #333; margin-top: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        canvas { display: block; background: #567d46; cursor: crosshair; }
+        
+        /* UI Elements */
+        #ui { width: 420px; background: #2c3e50; padding: 15px; box-sizing: border-box; border-radius: 0 0 10px 10px; }
+        #elixir-container { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        #elixir-bar { flex-grow: 1; height: 16px; background: #444; border-radius: 8px; overflow: hidden; border: 2px solid #000; }
+        #elixir-fill { width: 50%; height: 100%; background: linear-gradient(90deg, #d81b60, #f06292); transition: width 0.1s linear; }
+        #elixir-val { font-weight: bold; width: 20px; color: #f06292; }
+
+        #hand { display: flex; justify-content: space-between; gap: 5px; }
+        .card { 
+            width: 85px; height: 110px; background: #ecf0f1; color: #2c3e50; 
+            border-radius: 6px; font-size: 11px; cursor: pointer; text-align: center; 
+            display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+            border: 3px solid #7f8c8d; transition: transform 0.1s; position: relative;
+            padding: 5px; box-sizing: border-box;
+        }
+        .card:hover { transform: translateY(-5px); border-color: #f1c40f; }
+        .card.selected { border-color: #f1c40f; box-shadow: 0 0 10px #f1c40f; }
+        .card.disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(1); }
+        .card b { font-size: 10px; }
+        .cost-tag { 
+            position: absolute; top: -10px; right: -10px; background: #8e44ad; 
+            color: white; border-radius: 50%; width: 22px; height: 22px; 
+            display: flex; align-items: center; justify-content: center; font-weight: bold; border: 2px solid white;
+        }
+
+        #status-overlay { 
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-size: 48px; font-weight: bold; text-shadow: 4px 4px #000; display: none; z-index: 10;
+            text-align: center; width: 100%;
+        }
+        
+        #timer-display {
+            font-size: 24px; font-weight: bold; color: #f1c40f; text-shadow: 2px 2px #000; margin-bottom: 8px;
+        }
+        
+        #tower-score {
+            font-size: 14px; font-weight: bold; color: #fff; text-shadow: 1px 1px #000; margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="400" height="600"></canvas>
+        <div id="status-overlay">VICTORY</div>
+    </div>
+
+    <div id="ui">
+        <div id="timer-display">5:00</div>
+        <div id="tower-score">Player: 0 | Enemy: 0</div>
+        <div id="elixir-container">
+            <span style="font-size: 12px; color: #f06292;">💧</span>
+            <div id="elixir-bar"><div id="elixir-fill"></div></div>
+            <div id="elixir-val">5</div>
+        </div>
+        <div id="hand"></div>
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+/**
+ * DATA DEFINITIONS
+ */
+const UNIT_TYPES = {
+    'ELITE_BARBS': { name: 'E-Barbs', cost: 6, hp: 600, dmg: 50, speed: 2.2, range: 25, color: '#f1c40f', spell: false },
+    'GOBLIN_BARREL': { name: 'Gob Barrel', cost: 3, hp: 150, dmg: 20, speed: 2.5, range: 20, color: '#2ecc71', spell: true },
+    'MINI_PEKKA': { name: 'Mini P.E.K.K.A', cost: 4, hp: 700, dmg: 150, speed: 1.6, range: 30, color: '#3498db', spell: false },
+    'PEKKA': { name: 'P.E.K.K.A', cost: 7, hp: 2000, dmg: 250, speed: 0.8, range: 35, color: '#2980b9', spell: false },
+    'MEGA_KNIGHT': { name: 'Mega Knight', cost: 7, hp: 1800, dmg: 90, speed: 1.3, range: 35, color: '#8e44ad', spell: false },
+    'LAVAHOUND': { name: 'Lavahound', cost: 7, hp: 2500, dmg: 20, speed: 0.6, range: 40, color: '#e67e22', spell: false },
+    'FIREBALL': { name: 'Fireball', cost: 4, hp: 1, dmg: 400, speed: 0, range: 60, color: '#e74c3c', spell: true },
+    'ROCKET': { name: 'Rocket', cost: 6, hp: 1, dmg: 600, speed: 0, range: 80, color: '#f39c12', spell: true },
+    'GOBLIN_GIANT': { name: 'Gob Giant', cost: 6, hp: 1600, dmg: 70, speed: 1.2, range: 35, color: '#27ae60', spell: false },
+    'GUARDS': { name: 'Guards', cost: 3, hp: 250, dmg: 30, speed: 1.5, range: 25, color: '#bdc3c7', spell: false }
+};
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const elixirFill = document.getElementById('elixir-fill');
+const elixirValText = document.getElementById('elixir-val');
+const handDiv = document.getElementById('hand');
+
+let playerElixir = 5;
+let enemyElixir = 5;
+let units = [];
+let towers = [];
+let projectiles = [];
+let selectedCard = null;
+let gameOver = false;
+
+// Timer and tower tracking variables
+let gameTimeRemaining = 300; // 5 minutes in seconds
+let gameStartTime = null;
+let gameState = 'playing'; // 'playing', 'ended', 'overtime'
+let playerTowersCaptured = 0;
+let enemyTowersCaptured = 0;
+let overtimeMinutes = 2;
+let capturedTowerIndices = new Set(); // Track which towers have been captured
+
+/**
+ * INITIALIZATION
+ */
+function init() {
+    gameStartTime = Date.now();
+    // Player: 1 King, 2 Princess
+    towers.push(new Tower(100, 520, 'player', false));
+    towers.push(new Tower(300, 520, 'player', false));
+    towers.push(new Tower(200, 560, 'player', true));
+
+    // Enemy: 1 King, 2 Princess
+    towers.push(new Tower(100, 80, 'enemy', false));
+    towers.push(new Tower(300, 80, 'enemy', false));
+    towers.push(new Tower(200, 40, 'enemy', true));
+
+    createHand();
+    requestAnimationFrame(update);
+}
+
+class Tower {
+    constructor(x, y, owner, isKing) {
+        this.x = x; this.y = y; this.owner = owner; this.isKing = isKing;
+        this.hp = isKing ? 3500 : 1800;
+        this.maxHp = this.hp;
+        this.range = 160;
+        this.atkCooldown = 0;
+    }
+    draw() {
+        ctx.fillStyle = this.owner === 'player' ? '#2980b9' : '#c0392b';
+        if (this.isKing) {
+            ctx.fillRect(this.x - 25, this.y - 25, 50, 50);
+        } else {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 22, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        // HP Bar
+        ctx.fillStyle = '#000'; ctx.fillRect(this.x - 20, this.y - 35, 40, 6);
+        ctx.fillStyle = '#2ecc71'; ctx.fillRect(this.x - 20, this.y - 35, (this.hp / this.maxHp) * 40, 6);
+    }
+}
+
+class Unit {
+    constructor(typeKey, x, y, owner) {
+        const s = UNIT_TYPES[typeKey];
+        this.typeKey = typeKey;
+        this.name = s.name; this.x = x; this.y = y; this.owner = owner;
+        this.hp = s.hp; this.maxHp = s.hp; this.dmg = s.dmg;
+        this.speed = s.speed; this.range = s.range; this.color = s.color;
+        this.atkCooldown = 0;
+    }
+    update() {
+        // Simple AI/Movement Logic
+        let targets = [
+            ...towers.filter(t => t.owner !== this.owner && t.hp > 0),
+            ...units.filter(u => u.owner !== this.owner && u.hp > 0)
+        ];
+        
+        let closest = null;
+        let minDist = Infinity;
+        targets.forEach(t => {
+            let d = Math.hypot(t.x - this.x, t.y - this.y);
+            if (d < minDist) { minDist = d; closest = t; }
+        });
+
+        if (closest) {
+            let dist = Math.hypot(closest.x - this.x, closest.y - this.y);
+            if (dist > this.range) {
+                let angle = Math.atan2(closest.y - this.y, closest.x - this.x);
+                this.x += Math.cos(angle) * this.speed;
+                this.y += Math.sin(angle) * this.speed;
+            } else if (this.atkCooldown <= 0) {
+                closest.hp -= this.dmg;
+                this.atkCooldown = 60;
+            }
+        }
+        if (this.atkCooldown > 0) this.atkCooldown--;
+    }
+    draw() {
+        ctx.fillStyle = this.color;
+        ctx.beginPath(); ctx.arc(this.x, this.y, 12, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
+        // Label
+        ctx.fillStyle = "white"; ctx.font = "9px Arial"; ctx.textAlign = "center";
+        ctx.fillText(this.name[0], this.x, this.y + 3);
+        // HP
+        ctx.fillStyle = 'black'; ctx.fillRect(this.x - 10, this.y - 18, 20, 3);
+        ctx.fillStyle = 'red'; ctx.fillRect(this.x - 10, this.y - 18, (this.hp / this.maxHp) * 20, 3);
+    }
+}
+
+class Projectile {
+    constructor(startX, startY, targetX, targetY, damage, range, color, owner) {
+        this.x = startX;
+        this.y = startY;
+        this.targetX = targetX;
+        this.targetY = targetY;
+        this.damage = damage;
+        this.range = range;
+        this.color = color;
+        this.owner = owner;
+        this.speed = 4;
+        this.radius = 8;
+        this.traveled = false;
+    }
+
+    update() {
+        const dx = this.targetX - this.x;
+        const dy = this.targetY - this.y;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist > this.speed) {
+            const angle = Math.atan2(dy, dx);
+            this.x += Math.cos(angle) * this.speed;
+            this.y += Math.sin(angle) * this.speed;
+        } else {
+            this.x = this.targetX;
+            this.y = this.targetY;
+            this.traveled = true;
+        }
+    }
+
+    draw() {
+        // Draw rocket with flame trail
+        ctx.fillStyle = this.color;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Draw flame trail
+        ctx.fillStyle = 'rgba(255, 150, 0, 0.6)';
+        ctx.beginPath();
+        ctx.arc(this.x - 2, this.y - 2, this.radius * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Draw direction indicator
+        const startX = this.x;
+        const startY = this.y;
+        const dx = this.targetX - this.x;
+        const dy = this.targetY - this.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 0) {
+            const angle = Math.atan2(dy, dx);
+            const endX = startX + Math.cos(angle) * (this.radius + 5);
+            const endY = startY + Math.sin(angle) * (this.radius + 5);
+            ctx.strokeStyle = '#ff6b00';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            ctx.lineTo(endX, endY);
+            ctx.stroke();
+        }
+    }
+
+    explode() {
+        // Damage all units in range
+        units.filter(u => u.owner !== this.owner && Math.hypot(u.x - this.x, u.y - this.y) < this.range)
+            .forEach(u => u.hp -= this.damage);
+        // Damage towers
+        towers.filter(t => t.owner !== this.owner && Math.hypot(t.x - this.x, t.y - this.y) < this.range)
+            .forEach(t => t.hp -= this.damage * 0.4);
+        
+        // Visual explosion effect
+        ctx.fillStyle = "rgba(255, 150, 0, 0.7)";
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.range, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+/**
+ * ENGINE
+ */
+function update() {
+    if (gameOver && gameState !== 'overtime') return;
+
+    // Update timer
+    if (gameState === 'playing' || gameState === 'overtime') {
+        const elapsed = Math.floor((Date.now() - gameStartTime) / 1000);
+        let timeRemaining = gameState === 'playing' ? 300 - elapsed : overtimeMinutes * 60 - (elapsed - 300);
+        
+        if (timeRemaining <= 0 && gameState === 'playing') {
+            gameState = 'ended';
+            checkGameState();
+        } else if (timeRemaining <= 0 && gameState === 'overtime') {
+            // This shouldn't happen as overtimes end when someone captures a tower
+            gameState = 'ended';
+            endGame("DRAW");
+        } else {
+            gameTimeRemaining = timeRemaining;
+        }
+    }
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw River & Bridges
+    ctx.fillStyle = '#2980b9'; ctx.fillRect(0, 290, 400, 20);
+    ctx.fillStyle = '#7f8c8d'; ctx.fillRect(70, 280, 60, 40); ctx.fillRect(270, 280, 60, 40);
+
+    // Elixir Regen
+    if (playerElixir < 10) playerElixir += 0.007;
+    if (enemyElixir < 10) enemyElixir += 0.008; // AI is slightly faster "Automatic speed"
+    elixirFill.style.width = (playerElixir / 10) * 100 + '%';
+    elixirValText.innerText = Math.floor(playerElixir);
+
+    // AI Logic (Aggressive Automatic)
+    runAutomaticAI();
+
+    // Units Logic
+    units = units.filter(u => u.hp > 0);
+    units.forEach(u => { u.update(); u.draw(); });
+
+    // Projectiles Logic
+    projectiles.forEach(p => p.update());
+    projectiles.forEach(p => {
+        if (p.traveled) {
+            p.explode();
+        }
+    });
+    projectiles.forEach(p => p.draw());
+    projectiles = projectiles.filter(p => !p.traveled);
+
+    // Towers Logic
+    towers.forEach(t => {
+        if (t.hp <= 0) return;
+        t.draw();
+        // Defensive Fire
+        let target = units.find(u => u.owner !== t.owner && Math.hypot(u.x - t.x, u.y - t.y) < t.range);
+        if (target && t.atkCooldown <= 0) {
+            target.hp -= 40; t.atkCooldown = 45;
+            ctx.beginPath(); ctx.strokeStyle = "yellow"; ctx.moveTo(t.x, t.y); ctx.lineTo(target.x, target.y); ctx.stroke();
+        }
+        if (t.atkCooldown > 0) t.atkCooldown--;
+    });
+
+    checkGameState();
+    updateUI();
+    updateTimerDisplay();
+    requestAnimationFrame(update);
+}
+
+function runAutomaticAI() {
+    // AI chooses a random card and attempts to play it every ~2 seconds if elixir allows
+    if (Math.random() < 0.01) { // Probability check per frame for "automatic" feel
+        const keys = Object.keys(UNIT_TYPES);
+        const key = keys[Math.floor(Math.random() * keys.length)];
+        const card = UNIT_TYPES[key];
+
+        if (enemyElixir >= card.cost) {
+            const laneX = Math.random() > 0.5 ? 100 : 300;
+            if (card.spell) {
+                // AI targets your towers with spells
+                const targetTower = towers.filter(t => t.owner === 'player' && t.hp > 0)[0];
+                if (targetTower) deployUnit(key, targetTower.x, targetTower.y, 'enemy');
+            } else {
+                deployUnit(key, laneX, 120, 'enemy');
+            }
+            enemyElixir -= card.cost;
+        }
+    }
+}
+
+function deployUnit(key, x, y, owner) {
+    const card = UNIT_TYPES[key];
+    if (key === 'FIREBALL') {
+        // Fireball flies from player side to target location (with flying animation)
+        const startY = owner === 'player' ? 550 : 50;
+        const startX = x;
+        const projectile = new Projectile(startX, startY, x, y, card.dmg, card.range, card.color, owner);
+        projectiles.push(projectile);
+    } else if (key === 'ROCKET') {
+        // Rocket flies from player side to target location
+        const startY = owner === 'player' ? 550 : 50;
+        const startX = x;
+        const projectile = new Projectile(startX, startY, x, y, card.dmg, card.range, card.color, owner);
+        projectiles.push(projectile);
+    } else if (key === 'GOBLIN_BARREL') {
+        // Spawns 3 small units at location
+        for(let i=0; i<3; i++) {
+            units.push(new Unit(key, x + (i*15-15), y + (i*15-15), owner));
+        }
+    } else {
+        units.push(new Unit(key, x, y, owner));
+    }
+}
+
+function checkGameState() {
+    const enemyTowers = towers.filter(t => t.owner === 'enemy' && t.hp > 0).length;
+    const playerTowers = towers.filter(t => t.owner === 'player' && t.hp > 0).length;
+
+    // Track newly captured towers
+    towers.forEach((tower, index) => {
+        if (tower.hp <= 0 && !capturedTowerIndices.has(index)) {
+            capturedTowerIndices.add(index);
+            if (tower.owner === 'enemy') {
+                playerTowersCaptured++;
+            } else {
+                enemyTowersCaptured++;
+            }
+        }
+    });
+
+    // During regular play
+    if (gameState === 'playing') {
+        // Check if someone has destroyed all towers
+        if (enemyTowers === 0 || playerTowers === 0) {
+            gameState = 'ended';
+            // Check if someone destroyed all opponent towers
+            if (enemyTowers === 0 && playerTowers > 0) {
+                endGame("VICTORY - All Enemy Towers Destroyed!");
+            } else if (playerTowers === 0 && enemyTowers > 0) {
+                endGame("DEFEAT - All Your Towers Destroyed!");
+            } else {
+                // Both have towers destroyed at same time - check captures
+                if (playerTowersCaptured > enemyTowersCaptured) {
+                    endGame("VICTORY - More Towers Captured!");
+                } else if (enemyTowersCaptured > playerTowersCaptured) {
+                    endGame("DEFEAT - Enemy Captured More Towers!");
+                } else {
+                    // Still tied, start overtime
+                    startOvertime();
+                }
+            }
+        }
+        // Check if time has run out during regular play
+        else if (gameTimeRemaining <= 0) {
+            gameState = 'ended';
+            // Time's up - compare tower captures
+            if (playerTowersCaptured > enemyTowersCaptured) {
+                endGame("VICTORY - Time's Up, You Captured More!");
+            } else if (enemyTowersCaptured > playerTowersCaptured) {
+                endGame("DEFEAT - Time's Up, Enemy Captured More!");
+            } else {
+                // Tied on captures - start overtime
+                startOvertime();
+            }
+        }
+    }
+    // During overtime, whoever captures a tower wins
+    else if (gameState === 'overtime') {
+        if (playerTowersCaptured > enemyTowersCaptured) {
+            gameState = 'ended';
+            endGame("VICTORY - Overtime Tower Capture!");
+        } else if (enemyTowersCaptured > playerTowersCaptured) {
+            gameState = 'ended';
+            endGame("DEFEAT - Enemy Won in Overtime!");
+        }
+    }
+}
+
+function startOvertime() {
+    gameState = 'overtime';
+    gameStartTime = Date.now() + (300 * 1000); // Reset timer for overtime
+    const overlay = document.getElementById('status-overlay');
+    overlay.innerText = `OVERTIME! +${overtimeMinutes}:00\nFirst to capture a tower wins!`;
+    overlay.style.display = 'block';
+    overlay.style.color = '#f1c40f';
+    overlay.style.fontSize = '36px';
+    setTimeout(() => {
+        overlay.style.display = 'none';
+    }, 3000);
+}
+
+function endGame(text) {
+    gameOver = true;
+    const overlay = document.getElementById('status-overlay');
+    overlay.innerText = `${text}\n\nTowers Captured:\nPlayer: ${playerTowersCaptured}\nEnemy: ${enemyTowersCaptured}`;
+    overlay.style.display = 'block';
+    if (text.includes("VICTORY") || text.includes("Won")) {
+        overlay.style.color = "#f1c40f";
+    } else if (text.includes("DEFEAT") || text.includes("DEFEAT")) {
+        overlay.style.color = "#e74c3c";
+    } else {
+        overlay.style.color = "#95a5a6";
+    }
+}
+
+/**
+ * UI HANDLING
+ */
+function updateTimerDisplay() {
+    const timerDiv = document.getElementById('timer-display');
+    const scoreDiv = document.getElementById('tower-score');
+    
+    const minutes = Math.floor(gameTimeRemaining / 60);
+    const seconds = gameTimeRemaining % 60;
+    const timeStr = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    
+    if (gameState === 'overtime') {
+        timerDiv.innerText = `⚡ ${timeStr}`;
+        timerDiv.style.color = '#e74c3c';
+    } else {
+        timerDiv.innerText = timeStr;
+        timerDiv.style.color = gameTimeRemaining <= 30 ? '#e74c3c' : '#f1c40f';
+    }
+    
+    scoreDiv.innerText = `Player: ${playerTowersCaptured} | Enemy: ${enemyTowersCaptured}`;
+}
+function createHand() {
+    // Create weighted pool with Rocket appearing more often
+    const weightedPool = [];
+    const keys = Object.keys(UNIT_TYPES);
+    
+    keys.forEach(key => {
+        // Rocket appears 3 times more often
+        const weight = (key === 'ROCKET') ? 3 : 1;
+        for (let i = 0; i < weight; i++) {
+            weightedPool.push(key);
+        }
+    });
+    
+    for (let i = 0; i < 4; i++) {
+        addCardToHand(weightedPool[Math.floor(Math.random() * weightedPool.length)]);
+    }
+}
+
+function addCardToHand(key) {
+    const data = UNIT_TYPES[key];
+    const el = document.createElement('div');
+    el.className = 'card';
+    el.dataset.key = key;
+    el.innerHTML = `<b>${data.name}</b><div class="cost-tag">${data.cost}</div>`;
+    el.onclick = () => {
+        if (playerElixir >= data.cost) {
+            document.querySelectorAll('.card').forEach(c => c.classList.remove('selected'));
+            el.classList.add('selected');
+            selectedCard = key;
+        }
+    };
+    handDiv.appendChild(el);
+}
+
+function updateUI() {
+    document.querySelectorAll('.card').forEach(cardEl => {
+        const key = cardEl.dataset.key;
+        if (UNIT_TYPES[key].cost > playerElixir) cardEl.classList.add('disabled');
+        else cardEl.classList.remove('disabled');
+    });
+}
+
+canvas.onclick = (e) => {
+    if (!selectedCard || gameOver) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const data = UNIT_TYPES[selectedCard];
+    
+    // Deployment Rules: Spells anywhere, units on your half
+    if (!data.spell && y < 300) return;
+
+    deployUnit(selectedCard, x, y, 'player');
+    playerElixir -= data.cost;
+    
+    // Cycle Hand
+    const selectedEl = document.querySelector('.card.selected');
+    selectedEl.remove();
+    
+    // Add new card with weighted pool (Rocket appears more often)
+    const weightedPool = [];
+    const allKeys = Object.keys(UNIT_TYPES);
+    allKeys.forEach(key => {
+        const weight = (key === 'ROCKET') ? 3 : 1;
+        for (let i = 0; i < weight; i++) {
+            weightedPool.push(key);
+        }
+    });
+    addCardToHand(weightedPool[Math.floor(Math.random() * weightedPool.length)]);
+    selectedCard = null;
+};
+
+init();
+});
+</script>
+</body>
+</html>

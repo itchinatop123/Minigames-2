@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geometry Dash Monolith</title>
+    <style>
+        /* CSS SECTION */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050505;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Arial Black', sans-serif;
+            color: white;
+            user-select: none;
+        }
+
+        #game-wrapper {
+            position: relative;
+            box-shadow: 0 0 50px rgba(0, 200, 255, 0.3);
+            border: 2px solid #333;
+        }
+
+        canvas {
+            display: block;
+            background: linear-gradient(#006699, #001122);
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        #percentage {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 24px;
+            letter-spacing: 2px;
+            text-shadow: 2px 2px #000;
+        }
+
+        #status-msg {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 40px;
+            opacity: 0;
+            transition: opacity 0.1s;
+        }
+
+        .show { opacity: 1 !important; }
+    </style>
+</head>
+<body>
+
+    <div id="game-wrapper">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui-layer">
+            <div id="percentage">0%</div>
+            <div id="status-msg">PUSH START</div>
+        </div>
+    </div>
+
+    <script>
+        /* JAVASCRIPT SECTION */
+        document.addEventListener('DOMContentLoaded', function() {
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const percDisp = document.getElementById('percentage');
+        const statusMsg = document.getElementById('status-msg');
+
+        // Configuration
+        const FPS = 60;
+        const GRAVITY = 0.8;
+        const JUMP_FORCE = -13;
+        const PLAYER_SIZE = 50;
+        const GROUND_Y = 400;
+
+        // Level Data - 2D tiles [row][col]
+        const levels = [
+            {
+                name: "LEVEL 1",
+                speed: 3,
+                tiles: [
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]
+                ]
+            },
+            {
+                name: "LEVEL 2",
+                speed: 5,
+                tiles: [
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                    [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0]
+                ]
+            }
+        ];
+
+        let currentLevel = 0;
+        let SPEED = levels[currentLevel].speed;
+        let level = levels[currentLevel].tiles;
+        const LEVEL_ROWS = 8;
+        const LEVEL_COLS = 16;
+
+        canvas.width = 800;
+        canvas.height = 500;
+
+        // State
+        let gameState = 'PLAYING'; // PLAYING, DEAD
+        let worldX = 0;
+        let particles = [];
+        let screenShake = 0;
+        const tileSize = 50;
+
+        const player = {
+            x: 160,
+            y: GROUND_Y - PLAYER_SIZE,
+            vy: 0,
+            rotation: 0,
+            isGrounded: false,
+            dead: false,
+            
+            reset() {
+                this.y = GROUND_Y - PLAYER_SIZE;
+                this.vy = 0;
+                this.rotation = 0;
+                this.dead = false;
+            }
+        };
+
+        let keys = {};
+        let isFlying = false;
+        window.addEventListener('keydown', e => keys[e.code] = true);
+        window.addEventListener('keyup', e => keys[e.code] = false);
+        window.addEventListener('mousedown', () => { keys['Space'] = true; isFlying = true; });
+        window.addEventListener('mouseup', () => { keys['Space'] = false; isFlying = false; });
+
+        function createExplosion(x, y) {
+            for(let i=0; i<15; i++) {
+                particles.push({
+                    x, y,
+                    vx: (Math.random() - 0.5) * 15,
+                    vy: (Math.random() - 0.5) * 15,
+                    life: 1.0,
+                    color: '#00ffff'
+                });
+            }
+        }
+
+        function checkCollision(objX, objY, type) {
+            const p = player;
+            // Simplified AABB collision
+            const buffer = 4; // Make hitbox slightly smaller for fairness
+            if (p.x + buffer < objX + tileSize &&
+                p.x + PLAYER_SIZE - buffer > objX &&
+                p.y + buffer < objY + tileSize &&
+                p.y + PLAYER_SIZE - buffer > objY) {
+                
+                if (type === 2) return "KILL"; // Spike
+
+                // Block Logic
+                // If we were above the block in previous frame, land on it
+                if (p.vy >= 0 && (p.y + PLAYER_SIZE - p.vy) <= objY + 5) {
+                    p.y = objY - PLAYER_SIZE;
+                    p.vy = 0;
+                    p.isGrounded = true;
+                    return "LAND";
+                } else {
+                    return "KILL"; // Hit side of block
+                }
+            }
+            return null;
+        }
+
+        function update() {
+            if (player.dead) {
+                if (keys['Space']) restartGame();
+                return;
+            }
+
+            // Flying Logic - hold space to fly upward
+            if (isFlying && keys['Space']) {
+                let flySpeed = keys['t'] || keys['T'] ? -12 : -6; // Faster if 't' is pressed
+                player.vy = flySpeed;
+                player.isGrounded = false;
+            } else if (keys['Space'] && player.isGrounded) {
+                // Jump Logic (Buffered)
+                player.vy = JUMP_FORCE;
+                player.isGrounded = false;
+            } else {
+                // Physics (gravity)
+                player.vy += GRAVITY;
+            }
+            
+            player.y += player.vy;
+            worldX += SPEED;
+
+            // Ground Collision
+            player.isGrounded = false;
+            if (player.y + PLAYER_SIZE >= GROUND_Y) {
+                player.y = GROUND_Y - PLAYER_SIZE;
+                player.vy = 0;
+                player.isGrounded = true;
+                // Snap rotation to 90s
+                player.rotation = Math.round(player.rotation / 90) * 90;
+            }
+
+            // Tile Collisions - Check 2D level layout
+            let levelEnded = true;
+            level.forEach((row, rowIdx) => {
+                row.forEach((tile, colIdx) => {
+                    if (tile === 0) return;
+                    let tx = (colIdx * tileSize) - worldX + 400;
+                    let ty = GROUND_Y - (LEVEL_ROWS - rowIdx) * tileSize;
+                    
+                    if (tx > -tileSize && tx < canvas.width) {
+                        levelEnded = false;
+                        let result = checkCollision(tx, ty, tile);
+                        if (result === "KILL") die();
+                    }
+                });
+            });
+
+            if (levelEnded && worldX > 2400) {
+                if (currentLevel < levels.length - 1) {
+                    nextLevel();
+                } else {
+                    statusMsg.innerText = "GAME COMPLETE!";
+                    statusMsg.classList.add('show');
+                }
+            }
+
+            // Rotation
+            if (!player.isGrounded) {
+                player.rotation += 5;
+            }
+
+            // Particles update
+            particles.forEach((p, i) => {
+                p.x += p.vx; p.y += p.vy;
+                p.life -= 0.02;
+                if (p.life <= 0) particles.splice(i, 1);
+            });
+
+            if (screenShake > 0) screenShake--;
+            
+            percDisp.innerText = Math.floor((worldX / (level.length * tileSize)) * 100) + "%";
+        }
+
+        function die() {
+            if (player.dead) return;
+            player.dead = true;
+            screenShake = 10;
+            createExplosion(player.x + PLAYER_SIZE/2, player.y + PLAYER_SIZE/2);
+            statusMsg.innerText = "ATTEMPT " + (Math.floor(Math.random()*100));
+            statusMsg.classList.add('show');
+            setTimeout(restartGame, 800);
+        }
+
+        function restartGame() {
+            worldX = 0;
+            player.reset();
+            particles = [];
+            statusMsg.classList.remove('show');
+        }
+
+        function nextLevel() {
+            currentLevel++;
+            SPEED = levels[currentLevel].speed;
+            level = levels[currentLevel].tiles;
+            statusMsg.innerText = levels[currentLevel].name;
+            statusMsg.classList.add('show');
+            setTimeout(() => {
+                worldX = 0;
+                player.reset();
+                particles = [];
+                statusMsg.classList.remove('show');
+            }, 1500);
+        }
+
+        function draw() {
+            ctx.save();
+            if (screenShake > 0) {
+                ctx.translate(Math.random()*10-5, Math.random()*10-5);
+            }
+
+            // Background Parallax Floor Lines
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw Floor
+            ctx.fillStyle = '#001a2d';
+            ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+            ctx.strokeStyle = '#00ffff';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(0, GROUND_Y);
+            ctx.lineTo(canvas.width, GROUND_Y);
+            ctx.stroke();
+
+            // Moving Floor Lines
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.2)';
+            for(let i=0; i<20; i++) {
+                let lx = ((i * 100) - (worldX % 100));
+                ctx.beginPath();
+                ctx.moveTo(lx, GROUND_Y);
+                ctx.lineTo(lx - 50, canvas.height);
+                ctx.stroke();
+            }
+
+            // Draw Level - 2D layout
+            level.forEach((row, rowIdx) => {
+                row.forEach((tile, colIdx) => {
+                    let tx = (colIdx * tileSize) - worldX + 400;
+                    let ty = GROUND_Y - (LEVEL_ROWS - rowIdx) * tileSize;
+                    
+                    if (tile === 1) { // Block
+                        ctx.fillStyle = '#111';
+                        ctx.strokeStyle = '#00ffff';
+                        ctx.fillRect(tx, ty, tileSize, tileSize);
+                        ctx.strokeRect(tx, ty, tileSize, tileSize);
+                    } else if (tile === 2) { // Spike
+                        ctx.fillStyle = '#ff0055';
+                        ctx.beginPath();
+                        ctx.moveTo(tx, ty + tileSize);
+                        ctx.lineTo(tx + tileSize/2, ty);
+                        ctx.lineTo(tx + tileSize, ty + tileSize);
+                        ctx.fill();
+                        // Spike outline
+                        ctx.strokeStyle = 'white';
+                        ctx.lineWidth = 1;
+                        ctx.stroke();
+                    }
+                });
+            });
+
+            // Draw Player
+            if (!player.dead) {
+                ctx.save();
+                ctx.translate(player.x + PLAYER_SIZE/2, player.y + PLAYER_SIZE/2);
+                ctx.rotate(player.rotation * Math.PI / 180);
+                
+                // Body
+                ctx.fillStyle = '#00ffff';
+                ctx.fillRect(-PLAYER_SIZE/2, -PLAYER_SIZE/2, PLAYER_SIZE, PLAYER_SIZE);
+                
+                // Eyes (Classic GD Face)
+                ctx.fillStyle = '#000';
+                ctx.fillRect(-PLAYER_SIZE/2 + 8, -PLAYER_SIZE/2 + 8, 10, 10);
+                ctx.fillRect(PLAYER_SIZE/2 - 18, -PLAYER_SIZE/2 + 8, 10, 10);
+                ctx.fillRect(-PLAYER_SIZE/2 + 8, PLAYER_SIZE/2 - 15, 26, 5);
+                
+                ctx.restore();
+            }
+
+            // Particles
+            particles.forEach(p => {
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.fillRect(p.x, p.y, 8, 8);
+            });
+            ctx.globalAlpha = 1.0;
+
+            ctx.restore();
+            requestAnimationFrame(draw);
+        }
+
+        // Run Loop
+        setInterval(update, 1000/FPS);
+        draw();
+        });
+    </script>
+</body>
+</html>
