@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎮 MINIGAMES HUB 🎮</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+            background-attachment: fixed;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            text-align: center;
+            max-width: 1200px;
+            width: 100%;
+        }
+
+        h1 {
+            color: white;
+            font-size: 3.5em;
+            margin-top: 40px;
+            margin-bottom: 10px;
+            text-shadow: 3px 3px 6px rgba(0, 0, 0, 0.5);
+            animation: bounce 2s infinite;
+        }
+
+        .subtitle {
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 1.2em;
+            margin-bottom: 50px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .games-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+
+        .game-card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            cursor: pointer;
+            text-decoration: none;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .game-card:hover {
+            transform: translateY(-10px) scale(1.02);
+            box-shadow: 0 15px 50px rgba(0, 0, 0, 0.4);
+        }
+
+        .game-header {
+            padding: 20px;
+            font-size: 2.5em;
+            height: 100px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-bottom: 4px solid #667eea;
+        }
+
+        .game-card[data-game="chopper"] .game-header {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+
+        .game-card[data-game="pacman"] .game-header {
+            background: linear-gradient(135deg, #ffd89b 0%, #19547b 100%);
+        }
+
+        .game-card[data-game="shooting"] .game-header {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+        }
+
+        .game-card[data-game="clash"] .game-header {
+            background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);
+        }
+
+        .game-card[data-game="geometry"] .game-header {
+            background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+        }
+
+        .game-info {
+            padding: 20px;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .game-title {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .game-description {
+            color: #666;
+            font-size: 0.95em;
+            margin-bottom: 15px;
+            flex-grow: 1;
+        }
+
+        .play-button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            font-size: 1em;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.3s ease, transform 0.1s ease;
+            font-weight: bold;
+            width: 100%;
+        }
+
+        .play-button:hover {
+            background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+            transform: scale(1.05);
+        }
+
+        .play-button:active {
+            transform: scale(0.98);
+        }
+
+        @keyframes bounce {
+            0%, 100% {
+                transform: translateY(0);
+            }
+            50% {
+                transform: translateY(-20px);
+            }
+        }
+
+        footer {
+            color: rgba(255, 255, 255, 0.8);
+            margin-top: 30px;
+            font-size: 0.9em;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2.5em;
+                margin-top: 20px;
+            }
+
+            .games-grid {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎮 MINIGAMES HUB 🎮</h1>
+        <p class="subtitle">Choose a game and start playing!</p>
+
+        <div class="games-grid">
+            <!-- Chopper Game Card -->
+            <a href="ChopperGame/index.html" class="game-card" data-game="chopper">
+                <div class="game-header">🔪</div>
+                <div class="game-info">
+                    <div class="game-title">Chopper Game</div>
+                    <div class="game-description">Slice and chop vegetables! Test your reflexes and timing in this fast-paced slicing game. How high can you score?</div>
+                    <button class="play-button">Play Now →</button>
+                </div>
+            </a>
+
+            <!-- Pac-Man Game Card -->
+            <a href="PacManGame/index.html" class="game-card" data-game="pacman">
+                <div class="game-header">👾</div>
+                <div class="game-info">
+                    <div class="game-title">Pac-Man Game</div>
+                    <div class="game-description">Classic arcade action! Navigate the maze, collect dots, and avoid ghosts. Challenge yourself to reach higher levels!</div>
+                    <button class="play-button">Play Now →</button>
+                </div>
+            </a>
+
+            <!-- Shooting Game Card -->
+            <a href="Shooting Game/index.html" class="game-card" data-game="shooting">
+                <div class="game-header">🔫</div>
+                <div class="game-info">
+                    <div class="game-title">Crazy Shooters</div>
+                    <div class="game-description">Gun & Bomb Battle! Survive waves of enemies. Use guns, bombs, and missiles to defend yourself and rack up a massive score!</div>
+                    <button class="play-button">Play Now →</button>
+                </div>
+            </a>
+
+            <!-- Clash Game Card -->
+            <a href="Clash test/index.html" class="game-card" data-game="clash">
+                <div class="game-header">⚔️</div>
+                <div class="game-info">
+                    <div class="game-title">Clash Royale</div>
+                    <div class="game-description">Strategic card battling! Deploy your cards wisely to destroy towers. Auto AI battles to keep the action going non-stop!</div>
+                    <button class="play-button">Play Now →</button>
+                </div>
+            </a>
+
+            <!-- Geometry Dash Card -->
+            <a href="ChopperGame/Geometry run/index.html" class="game-card" data-game="geometry">
+                <div class="game-header">🎵</div>
+                <div class="game-info">
+                    <div class="game-title">Geometry Dash</div>
+                    <div class="game-description">Rhythm-based platformer! Jump and fly your way through geometric obstacles. Sync to the beat and complete all levels!</div>
+                    <button class="play-button">Play Now →</button>
+                </div>
+            </a>
+        </div>
+
+        <footer>
+            <p>✨ Enjoy the games! Made with ❤️ | All games playable online</p>
+        </footer>
+    </div>
+</body>
+</html>
