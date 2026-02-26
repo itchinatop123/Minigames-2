@@ -92,21 +92,34 @@ const elixirValText = document.getElementById('elixir-val');
 const handDiv = document.getElementById('hand');
 
 let playerElixir = 5;
-let enemyElixir = 5;
+let enemyElixir = 5; // Balanced start
 let units = [];
 let towers = [];
 let projectiles = [];
 let selectedCard = null;
+let playerHand = [];
+let enemyHand = [];
 let gameOver = false;
 
 // Timer and tower tracking variables
 let gameTimeRemaining = 300; // 5 minutes in seconds
 let gameStartTime = null;
+let overtimeStartTime = null; // Separate timer for overtime
 let gameState = 'playing'; // 'playing', 'ended', 'overtime'
 let playerTowersCaptured = 0;
 let enemyTowersCaptured = 0;
 let overtimeMinutes = 2;
 let capturedTowerIndices = new Set(); // Track which towers have been captured
+
+// Balance levers: balanced for normal gameplay
+const TOWER_DAMAGE_TO_UNIT = {
+    player: 1.0,
+    enemy: 1.0
+};
+const UNIT_DAMAGE_TO_TOWER = {
+    player: 1.0,
+    enemy: 1.0
+};
 
 /**
  * INITIALIZATION
@@ -124,6 +137,7 @@ function init() {
     towers.push(new Tower(200, 40, 'enemy', true));
 
     createHand();
+    createEnemyHand();
     requestAnimationFrame(update);
 }
 
@@ -134,6 +148,7 @@ class Tower {
         this.maxHp = this.hp;
         this.range = 160;
         this.atkCooldown = 0;
+        this.atkDamage = 50; // Same damage for both
     }
     draw() {
         ctx.fillStyle = this.owner === 'player' ? '#2980b9' : '#c0392b';
@@ -155,7 +170,10 @@ class Unit {
         const s = UNIT_TYPES[typeKey];
         this.typeKey = typeKey;
         this.name = s.name; this.x = x; this.y = y; this.owner = owner;
-        this.hp = s.hp; this.maxHp = s.hp; this.dmg = s.dmg;
+        // Normal stats for both sides
+        this.hp = s.hp;
+        this.maxHp = this.hp; 
+        this.dmg = s.dmg;
         this.speed = s.speed; this.range = s.range; this.color = s.color;
         this.atkCooldown = 0;
     }
@@ -180,7 +198,11 @@ class Unit {
                 this.x += Math.cos(angle) * this.speed;
                 this.y += Math.sin(angle) * this.speed;
             } else if (this.atkCooldown <= 0) {
-                closest.hp -= this.dmg;
+                const isTower = closest instanceof Tower;
+                const damage = isTower
+                    ? this.dmg * (this.owner === 'player' ? UNIT_DAMAGE_TO_TOWER.player : UNIT_DAMAGE_TO_TOWER.enemy)
+                    : this.dmg;
+                closest.hp -= damage;
                 this.atkCooldown = 60;
             }
         }
@@ -286,18 +308,22 @@ function update() {
 
     // Update timer
     if (gameState === 'playing' || gameState === 'overtime') {
-        const elapsed = Math.floor((Date.now() - gameStartTime) / 1000);
-        let timeRemaining = gameState === 'playing' ? 300 - elapsed : overtimeMinutes * 60 - (elapsed - 300);
+        let timeRemaining;
         
-        if (timeRemaining <= 0 && gameState === 'playing') {
-            gameState = 'ended';
-            checkGameState();
-        } else if (timeRemaining <= 0 && gameState === 'overtime') {
-            // This shouldn't happen as overtimes end when someone captures a tower
-            gameState = 'ended';
-            endGame("DRAW");
-        } else {
-            gameTimeRemaining = timeRemaining;
+        if (gameState === 'playing') {
+            const elapsed = Math.floor((Date.now() - gameStartTime) / 1000);
+            timeRemaining = 300 - elapsed;
+            if (timeRemaining <= 0) {
+                // Time's up - check game state (this may trigger overtime)
+                checkGameState();
+            }
+            gameTimeRemaining = Math.max(0, timeRemaining);
+        } else if (gameState === 'overtime') {
+            // Overtime: use separate timer
+            const overtimeElapsed = Math.floor((Date.now() - overtimeStartTime) / 1000);
+            timeRemaining = (overtimeMinutes * 60) - overtimeElapsed;
+            // Game only ends when someone captures a tower, NOT when timer runs out
+            gameTimeRemaining = Math.max(0, timeRemaining);
         }
     }
 
@@ -309,7 +335,7 @@ function update() {
 
     // Elixir Regen
     if (playerElixir < 10) playerElixir += 0.007;
-    if (enemyElixir < 10) enemyElixir += 0.008; // AI is slightly faster "Automatic speed"
+    if (enemyElixir < 10) enemyElixir += 0.007; // Same regen for both
     elixirFill.style.width = (playerElixir / 10) * 100 + '%';
     elixirValText.innerText = Math.floor(playerElixir);
 
@@ -337,7 +363,9 @@ function update() {
         // Defensive Fire
         let target = units.find(u => u.owner !== t.owner && Math.hypot(u.x - t.x, u.y - t.y) < t.range);
         if (target && t.atkCooldown <= 0) {
-            target.hp -= 40; t.atkCooldown = 45;
+            const damage = t.atkDamage * (target.owner === 'player' ? TOWER_DAMAGE_TO_UNIT.player : TOWER_DAMAGE_TO_UNIT.enemy);
+            target.hp -= damage;
+            t.atkCooldown = 30; // Same rate for both
             ctx.beginPath(); ctx.strokeStyle = "yellow"; ctx.moveTo(t.x, t.y); ctx.lineTo(target.x, target.y); ctx.stroke();
         }
         if (t.atkCooldown > 0) t.atkCooldown--;
@@ -350,22 +378,178 @@ function update() {
 }
 
 function runAutomaticAI() {
-    // AI chooses a random card and attempts to play it every ~2 seconds if elixir allows
-    if (Math.random() < 0.01) { // Probability check per frame for "automatic" feel
-        const keys = Object.keys(UNIT_TYPES);
-        const key = keys[Math.floor(Math.random() * keys.length)];
-        const card = UNIT_TYPES[key];
-
-        if (enemyElixir >= card.cost) {
-            const laneX = Math.random() > 0.5 ? 100 : 300;
+    // ULTRA-AGGRESSIVE AI - Plays with perfect strategy FROM BALANCED HAND
+    
+    // Analyze board state
+    const playerTowers = towers.filter(t => t.owner === 'player' && t.hp > 0);
+    const enemyTowers = towers.filter(t => t.owner === 'enemy' && t.hp > 0);
+    const playerKing = towers.find(t => t.owner === 'player' && t.isKing && t.hp > 0);
+    const enemyKing = towers.find(t => t.owner === 'enemy' && t.isKing && t.hp > 0);
+    const playerUnitsLeft = units.filter(u => u.owner === 'player').length;
+    const enemyUnitsLeft = units.filter(u => u.owner === 'enemy').length;
+    const playerUnitsLeftLane = units.filter(u => u.owner === 'player' && u.x < 200).length;
+    const playerUnitsRightLane = units.filter(u => u.owner === 'player' && u.x >= 200).length;
+    
+    // EXTREME AGGRESSION - 20% chance per frame instead of 8%
+    if (Math.random() < 0.20) {
+        
+        // Find best card to play from the enemy's hand
+        const winConditionCards = ['ROCKET', 'PEKKA', 'MEGA_KNIGHT', 'FIREBALL'];
+        const supportCards = ['ELITE_BARBS', 'MINI_PEKKA', 'GOBLIN_GIANT', 'GUARDS'];
+        const lowCostCards = ['GOBLIN_BARREL', 'GUARDS'];
+        
+        // Get card indices in hand that match strategy priorities
+        const winnerIndices = enemyHand.map((card, idx) => winConditionCards.includes(card) ? idx : -1).filter(i => i !== -1);
+        const supportIndices = enemyHand.map((card, idx) => supportCards.includes(card) ? idx : -1).filter(i => i !== -1);
+        const allIndices = enemyHand.map((card, idx) => idx);
+        
+        let selectedIdx = -1;
+        let selectedKey;
+        
+        // Priority 1: If low HP tower exists and we have ROCKET, ALWAYS use it
+        const weakTower = playerTowers.find(t => t.hp < 1200 && !t.isKing);
+        const rocketIdx = enemyHand.indexOf('ROCKET');
+        if (weakTower && rocketIdx !== -1 && enemyElixir >= UNIT_TYPES['ROCKET'].cost) {
+            selectedIdx = rocketIdx;
+            selectedKey = 'ROCKET';
+        }
+        // Priority 2: If player king is weak and we have ROCKET
+        else if (playerKing && playerKing.hp < 2000 && rocketIdx !== -1 && enemyElixir >= UNIT_TYPES['ROCKET'].cost) {
+            selectedIdx = rocketIdx;
+            selectedKey = 'ROCKET';
+        }
+        // Priority 3: Play strongest cards from hand
+        else if (winnerIndices.length > 0) {
+            // Try PEKKA first, then MEGA_KNIGHT, then ROCKET, then FIREBALL
+            selectedIdx = winnerIndices.find(i => {
+                const k = enemyHand[i];
+                return k === 'PEKKA' && enemyElixir >= UNIT_TYPES[k].cost;
+            });
+            if (selectedIdx === undefined) {
+                selectedIdx = winnerIndices.find(i => {
+                    const k = enemyHand[i];
+                    return k === 'MEGA_KNIGHT' && enemyElixir >= UNIT_TYPES[k].cost;
+                });
+            }
+            if (selectedIdx === undefined) {
+                selectedIdx = winnerIndices.find(i => {
+                    const k = enemyHand[i];
+                    return k === 'ROCKET' && enemyElixir >= UNIT_TYPES[k].cost;
+                });
+            }
+            if (selectedIdx === undefined) {
+                selectedIdx = winnerIndices.find(i => {
+                    const k = enemyHand[i];
+                    return k === 'FIREBALL' && enemyElixir >= UNIT_TYPES[k].cost;
+                });
+            }
+            if (selectedIdx !== undefined) {
+                selectedKey = enemyHand[selectedIdx];
+            }
+        }
+        // Tier 2: Play support cards from hand
+        else if (supportIndices.length > 0) {
+            selectedIdx = supportIndices.find(i => enemyElixir >= UNIT_TYPES[enemyHand[i]].cost);
+            if (selectedIdx !== undefined) {
+                selectedKey = enemyHand[selectedIdx];
+            }
+        }
+        // Tier 3: Play any affordable card from hand
+        else {
+            selectedIdx = allIndices.find(i => enemyElixir >= UNIT_TYPES[enemyHand[i]].cost);
+            if (selectedIdx !== undefined) {
+                selectedKey = enemyHand[selectedIdx];
+            }
+        }
+        
+        if (selectedIdx !== -1 && selectedKey) {
+            const card = UNIT_TYPES[selectedKey];
+            if (enemyElixir >= card.cost) {
+                if (card.spell) {
+                    // Spells: target king > damaged tower > tower with most enemies around it
+                    let targetTower = playerKing;
+                    if (!playerKing) {
+                        const damagedTower = playerTowers.reduce((prev, curr) => 
+                            curr.hp < prev.hp ? curr : prev, playerTowers[0]);
+                        targetTower = damagedTower;
+                    }
+                    if (targetTower) deployUnit(selectedKey, targetTower.x, targetTower.y, 'enemy');
+                } else {
+                    // Predict which lane needs reinforcement and attack there
+                    const underPressureLeft = playerUnitsLeftLane === 0; // LEFT LANE IS WEAK
+                    const underPressureRight = playerUnitsRightLane === 0; // RIGHT LANE IS WEAK
+                    
+                    let deployX;
+                    if (underPressureLeft && underPressureRight) {
+                        // Deploy wherever the player isn't
+                        deployX = Math.random() > 0.5 ? 100 : 300;
+                    } else if (underPressureLeft) {
+                        deployX = 100;
+                    } else if (underPressureRight) {
+                        deployX = 300;
+                    } else {
+                        // Both lanes defended - choose less defended lane
+                        deployX = playerUnitsLeftLane <= playerUnitsRightLane ? 100 : 300;
+                    }
+                    
+                    // Deploy at optimal attacking position (mid-board)
+                    deployUnit(selectedKey, deployX, 150, 'enemy');
+                }
+                enemyElixir -= card.cost;
+                
+                // Remove card from hand and add a new one
+                enemyHand.splice(selectedIdx, 1);
+                addNewCardToEnemyHand();
+            }
+        }
+    }
+    
+    // DOUBLE DEPLOY at 7+ elixir
+    if (enemyElixir >= 7 && Math.random() < 0.12) {
+        const strongCardsInHand = enemyHand.filter((card, idx) => {
+            const isStrong = ['PEKKA', 'MEGA_KNIGHT', 'ROCKET', 'FIREBALL'].includes(card);
+            return isStrong && enemyElixir >= UNIT_TYPES[card].cost;
+        });
+        
+        if (strongCardsInHand.length > 0) {
+            const key = strongCardsInHand[Math.floor(Math.random() * strongCardsInHand.length)];
+            const card = UNIT_TYPES[key];
+            const handIdx = enemyHand.indexOf(key);
+            
             if (card.spell) {
-                // AI targets your towers with spells
-                const targetTower = towers.filter(t => t.owner === 'player' && t.hp > 0)[0];
+                const targetTower = playerTowers.find(t => !t.isKing) || playerTowers[0];
                 if (targetTower) deployUnit(key, targetTower.x, targetTower.y, 'enemy');
             } else {
-                deployUnit(key, laneX, 120, 'enemy');
+                const laneX = Math.random() > 0.5 ? 100 : 300;
+                deployUnit(key, laneX, 150, 'enemy');
             }
             enemyElixir -= card.cost;
+            
+            // Remove card from hand and add a new one
+            enemyHand.splice(handIdx, 1);
+            addNewCardToEnemyHand();
+        }
+    }
+    
+    // TRIPLE DEPLOY at 9+ elixir - ultimate push
+    if (enemyElixir >= 9 && Math.random() < 0.08) {
+        const ultimateCardsInHand = enemyHand.filter((card, idx) => {
+            const isUltimate = ['PEKKA', 'MEGA_KNIGHT', 'GOBLIN_GIANT'].includes(card);
+            return isUltimate && enemyElixir >= UNIT_TYPES[card].cost;
+        });
+        
+        if (ultimateCardsInHand.length > 0) {
+            const key = ultimateCardsInHand[Math.floor(Math.random() * ultimateCardsInHand.length)];
+            const card = UNIT_TYPES[key];
+            const handIdx = enemyHand.indexOf(key);
+            
+            const laneX = Math.random() > 0.5 ? 100 : 300;
+            deployUnit(key, laneX, 140, 'enemy');
+            enemyElixir -= card.cost;
+            
+            // Remove card from hand and add a new one
+            enemyHand.splice(handIdx, 1);
+            addNewCardToEnemyHand();
         }
     }
 }
@@ -376,13 +560,15 @@ function deployUnit(key, x, y, owner) {
         // Fireball flies from player side to target location (with flying animation)
         const startY = owner === 'player' ? 550 : 50;
         const startX = x;
-        const projectile = new Projectile(startX, startY, x, y, card.dmg, card.range, card.color, owner);
+        const damage = card.dmg; // Same damage for both sides
+        const projectile = new Projectile(startX, startY, x, y, damage, card.range, card.color, owner);
         projectiles.push(projectile);
     } else if (key === 'ROCKET') {
         // Rocket flies from player side to target location
         const startY = owner === 'player' ? 550 : 50;
         const startX = x;
-        const projectile = new Projectile(startX, startY, x, y, card.dmg, card.range, card.color, owner);
+        const damage = card.dmg; // Same damage for both sides
+        const projectile = new Projectile(startX, startY, x, y, damage, card.range, card.color, owner);
         projectiles.push(projectile);
     } else if (key === 'GOBLIN_BARREL') {
         // Spawns 3 small units at location
@@ -460,7 +646,7 @@ function checkGameState() {
 
 function startOvertime() {
     gameState = 'overtime';
-    gameStartTime = Date.now() + (300 * 1000); // Reset timer for overtime
+    overtimeStartTime = Date.now(); // Set when overtime actually starts
     const overlay = document.getElementById('status-overlay');
     overlay.innerText = `OVERTIME! +${overtimeMinutes}:00\nFirst to capture a tower wins!`;
     overlay.style.display = 'block';
@@ -507,21 +693,54 @@ function updateTimerDisplay() {
     scoreDiv.innerText = `Player: ${playerTowersCaptured} | Enemy: ${enemyTowersCaptured}`;
 }
 function createHand() {
-    // Create weighted pool with Rocket appearing more often
-    const weightedPool = [];
-    const keys = Object.keys(UNIT_TYPES);
+    // Organize cards by cost tier for balanced deck
+    const lowCost = Object.keys(UNIT_TYPES).filter(k => UNIT_TYPES[k].cost <= 4);
+    const midCost = Object.keys(UNIT_TYPES).filter(k => UNIT_TYPES[k].cost === 6 || UNIT_TYPES[k].cost === 7);
+    const highCost = Object.keys(UNIT_TYPES).filter(k => UNIT_TYPES[k].cost > 7 || (UNIT_TYPES[k].spell && UNIT_TYPES[k].cost >= 4));
     
-    keys.forEach(key => {
-        // Rocket appears 3 times more often
-        const weight = (key === 'ROCKET') ? 3 : 1;
-        for (let i = 0; i < weight; i++) {
-            weightedPool.push(key);
-        }
-    });
+    playerHand = [];
     
-    for (let i = 0; i < 4; i++) {
-        addCardToHand(weightedPool[Math.floor(Math.random() * weightedPool.length)]);
+    // Ensure balanced distribution: 2 low, 1 mid, 1 high (or flexible based on availability)
+    playerHand.push(lowCost[Math.floor(Math.random() * lowCost.length)]);
+    playerHand.push(lowCost[Math.floor(Math.random() * lowCost.length)]);
+    playerHand.push(midCost[Math.floor(Math.random() * midCost.length)]);
+    playerHand.push(highCost.length > 0 ? highCost[Math.floor(Math.random() * highCost.length)] : midCost[Math.floor(Math.random() * midCost.length)]);
+    
+    playerHand.forEach(key => addCardToHand(key));
+}
+
+function createEnemyHand() {
+    // AI gets the same balanced deck as player
+    const lowCost = Object.keys(UNIT_TYPES).filter(k => UNIT_TYPES[k].cost <= 4);
+    const midCost = Object.keys(UNIT_TYPES).filter(k => UNIT_TYPES[k].cost === 6 || UNIT_TYPES[k].cost === 7);
+    const highCost = Object.keys(UNIT_TYPES).filter(k => UNIT_TYPES[k].cost > 7 || (UNIT_TYPES[k].spell && UNIT_TYPES[k].cost >= 4));
+    
+    enemyHand = [];
+    
+    // Ensure balanced distribution: 2 low, 1 mid, 1 high (or flexible based on availability)
+    enemyHand.push(lowCost[Math.floor(Math.random() * lowCost.length)]);
+    enemyHand.push(lowCost[Math.floor(Math.random() * lowCost.length)]);
+    enemyHand.push(midCost[Math.floor(Math.random() * midCost.length)]);
+    enemyHand.push(highCost.length > 0 ? highCost[Math.floor(Math.random() * highCost.length)] : midCost[Math.floor(Math.random() * midCost.length)]);
+}
+
+function addNewCardToEnemyHand() {
+    // Add new card with balanced approach (same as player)
+    const lowCost = Object.keys(UNIT_TYPES).filter(k => UNIT_TYPES[k].cost <= 4);
+    const midCost = Object.keys(UNIT_TYPES).filter(k => UNIT_TYPES[k].cost === 6 || UNIT_TYPES[k].cost === 7);
+    const highCost = Object.keys(UNIT_TYPES).filter(k => UNIT_TYPES[k].cost > 7 || (UNIT_TYPES[k].spell && UNIT_TYPES[k].cost >= 4));
+    
+    // 50% chance for low cost, 30% mid, 20% high
+    let newCard;
+    const rng = Math.random();
+    if (rng < 0.5) {
+        newCard = lowCost[Math.floor(Math.random() * lowCost.length)];
+    } else if (rng < 0.8) {
+        newCard = midCost[Math.floor(Math.random() * midCost.length)];
+    } else {
+        newCard = highCost.length > 0 ? highCost[Math.floor(Math.random() * highCost.length)] : lowCost[Math.floor(Math.random() * lowCost.length)];
     }
+    enemyHand.push(newCard);
 }
 
 function addCardToHand(key) {
@@ -562,20 +781,37 @@ canvas.onclick = (e) => {
     deployUnit(selectedCard, x, y, 'player');
     playerElixir -= data.cost;
     
-    // Cycle Hand
+    // Cycle Hand with balanced pool
     const selectedEl = document.querySelector('.card.selected');
     selectedEl.remove();
     
-    // Add new card with weighted pool (Rocket appears more often)
-    const weightedPool = [];
-    const allKeys = Object.keys(UNIT_TYPES);
-    allKeys.forEach(key => {
-        const weight = (key === 'ROCKET') ? 3 : 1;
-        for (let i = 0; i < weight; i++) {
-            weightedPool.push(key);
-        }
-    });
-    addCardToHand(weightedPool[Math.floor(Math.random() * weightedPool.length)]);
+    // Remove from playerHand array
+    const cardIdx = playerHand.indexOf(selectedCard);
+    if (cardIdx !== -1) {
+        playerHand.splice(cardIdx, 1);
+    }
+    
+    // Add new card with balanced approach
+    const lowCost = Object.keys(UNIT_TYPES).filter(k => UNIT_TYPES[k].cost <= 4);
+    const midCost = Object.keys(UNIT_TYPES).filter(k => UNIT_TYPES[k].cost === 6 || UNIT_TYPES[k].cost === 7);
+    const highCost = Object.keys(UNIT_TYPES).filter(k => UNIT_TYPES[k].cost > 7 || (UNIT_TYPES[k].spell && UNIT_TYPES[k].cost >= 4));
+    
+    // 50% chance for low cost, 30% mid, 20% high
+    let newCard;
+    const rng = Math.random();
+    if (rng < 0.5) {
+        newCard = lowCost[Math.floor(Math.random() * lowCost.length)];
+    } else if (rng < 0.8) {
+        newCard = midCost[Math.floor(Math.random() * midCost.length)];
+    } else {
+        newCard = highCost.length > 0 ? highCost[Math.floor(Math.random() * highCost.length)] : lowCost[Math.floor(Math.random() * lowCost.length)];
+    }
+    
+    // Add new card to both UI and playerHand array
+    playerHand.push(newCard);
+    addCardToHand(newCard);
+    
+    // Reset selected card
     selectedCard = null;
 };
 
